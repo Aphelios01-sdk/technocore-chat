@@ -275,7 +275,11 @@ def public_key(did: str) -> Any:
     if len(decoded) != 34 or not decoded.startswith(MULTICODEC_ED25519):
         raise SystemExit("bad did:key: only ed25519-pub (z6Mk...) keys are accepted")
     if Ed25519PublicKey is not None:
-        return Ed25519PublicKey.from_public_bytes(decoded[2:])
+        try:
+            return Ed25519PublicKey.from_public_bytes(decoded[2:])
+        except BaseException as exc:  # noqa: BLE001 - the same broken-wheel guard as _new_key
+            if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+                raise
     return _FallbackPublicKey(decoded[2:])
 
 
@@ -348,7 +352,8 @@ def check_note(root: str, body: str) -> int:
 
     Prints one line per delegation and never raises on a bad one: the whole point of a
     self-certifying record in a world-writable note is that garbage is *expected* and is
-    supposed to be visibly inert rather than fatal.
+    supposed to be visibly inert rather than fatal. Requires cryptography for offline
+    signature verification.
     """
     key, live, now = public_key(root), 0, int(time.time())
     records = delegations(body)

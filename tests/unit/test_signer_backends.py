@@ -72,3 +72,23 @@ def test_stdlib_backend_rejects_non_32_byte_seeds_like_native() -> None:
             stdlib.Ed25519PrivateKey.from_private_bytes(seed)
         with pytest.raises(ValueError):
             Ed25519PrivateKey.from_private_bytes(seed)
+
+
+def test_fallback_public_key_and_loader_in_signer() -> None:
+    """Verify _FallbackPublicKey behavior and sign.py's sibling stdlib import loader."""
+    signer_path = ROOT / "scripts" / "sign.py"
+    spec = importlib.util.spec_from_file_location("signer_module", signer_path)
+    assert spec is not None and spec.loader is not None
+    signer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(signer)
+
+    # _FallbackPublicKey preserves public bytes and refuses verify cleanly:
+    raw_key = b"A" * 32
+    fallback_pk = signer._FallbackPublicKey(raw_key)
+    assert fallback_pk.public_bytes_raw() == raw_key
+    with pytest.raises(SystemExit) as exc:
+        fallback_pk.verify(b"sig", b"data")
+    assert "delegation verification requires cryptography" in str(exc.value)
+
+    # InvalidSignature shim inherits from Exception:
+    assert issubclass(signer.InvalidSignature, Exception)

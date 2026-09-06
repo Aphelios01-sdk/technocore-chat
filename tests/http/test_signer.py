@@ -36,7 +36,9 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def run_without_cryptography(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_without_cryptography(
+    tmp_path: Path, *args: str, input: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the signer with a package import that fails outside Exception."""
     blocker = tmp_path / "cryptography"
     blocker.mkdir(parents=True)
@@ -52,6 +54,7 @@ def run_without_cryptography(tmp_path: Path, *args: str) -> subprocess.Completed
     )
     return subprocess.run(
         [sys.executable, str(SIGNER), *args],
+        input=input,
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -162,6 +165,108 @@ def test_signer_falls_back_when_cryptography_import_panics(tmp_path, client) -> 
     import didkey
 
     didkey.verify(note_did, note_sig, f"room-owners|fallbackroom|8|{did}")
+
+    note_path_cmd = run_without_cryptography(tmp_path / "note", "note", did)
+    assert note_path_cmd.returncode == 0, note_path_cmd.stderr
+    assert note_path_cmd.stdout.strip().startswith("/kv/did-")
+
+    agent_out = run_without_cryptography(tmp_path / "agent_did", "did", "--seed", "22" * 32)
+    assert agent_out.returncode == 0, agent_out.stderr
+    agent_did = agent_out.stdout.strip()
+    delegate_cmd = run_without_cryptography(
+        tmp_path / "delegate",
+        "delegate",
+        "--seed",
+        SEED,
+        agent_did,
+        "r:fallbackroom",
+        "30",
+        "999",
+    )
+    assert delegate_cmd.returncode == 0, delegate_cmd.stderr
+    assert f"delegate: {agent_did} r:fallbackroom" in delegate_cmd.stdout
+
+    record = f"delegate: {agent_did} r:fallbackroom 9999999999 1 fake_sig"
+    check_cmd = run_without_cryptography(tmp_path / "check", "check", did, input=record)
+    assert check_cmd.returncode != 0
+    assert "delegation verification requires cryptography" in check_cmd.stderr
+
+
+def test_signer_falls_back_when_cryptography_methods_panic(tmp_path) -> None:
+    """A wheel that imports cleanly but panics in C/Rust calls must still fall back.
+
+    Simulates pyo3 panic behavior where Ed25519PrivateKey.from_private_bytes or
+    Ed25519PublicKey.from_public_bytes raises BaseException. Keygen, signing, note path,
+    and delegation generation must fall back to the stdlib backend; check must refuse
+    with a clean diagnostic rather than raising an unhandled exception.
+    """
+    blocker = tmp_path / "cryptography"
+    hazmat = blocker / "hazmat" / "primitives" / "asymmetric"
+    hazmat.mkdir(parents=True)
+    (blocker / "__init__.py").write_text("", encoding="utf-8")
+    (blocker / "exceptions.py").write_text(
+        "class InvalidSignature(Exception):\n    pass\n", encoding="utf-8"
+    )
+    (blocker / "hazmat" / "__init__.py").write_text("", encoding="utf-8")
+    (blocker / "hazmat" / "primitives" / "__init__.py").write_text("", encoding="utf-8")
+    (hazmat / "__init__.py").write_text("", encoding="utf-8")
+    (hazmat / "ed25519.py").write_text(
+        "class _PanicException(BaseException):\n"
+        "    pass\n\n"
+        "class Ed25519PrivateKey:\n"
+        "    @classmethod\n"
+        "    def from_private_bytes(cls, data):\n"
+        "        raise _PanicException('simulated pyo3 panic in private key construction')\n\n"
+        "class Ed25519PublicKey:\n"
+        "    @classmethod\n"
+        "    def from_public_bytes(cls, data):\n"
+        "        raise _PanicException('simulated pyo3 panic in public key construction')\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(tmp_path), env.get("PYTHONPATH", "")) if part
+    )
+
+    def run_panicking(*args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SIGNER), *args],
+            input=input,
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env=env,
+        )
+
+    keygen = run_panicking("keygen")
+    assert keygen.returncode == 0, keygen.stderr
+    assert "did:  did:key:z6Mk" in keygen.stdout
+
+    did_cmd = run_panicking("did", "--seed", SEED)
+    assert did_cmd.returncode == 0, did_cmd.stderr
+    did = did_cmd.stdout.strip()
+    assert did.startswith("did:key:z6Mk")
+
+    say = run_panicking("say", "--seed", SEED, "fallbackroom", "1", "test")
+    assert say.returncode == 0, say.stderr
+
+    set_cmd = run_panicking("set", "--seed", SEED, "ns", "k", "1", "v")
+    assert set_cmd.returncode == 0, set_cmd.stderr
+
+    note = run_panicking("note", did)
+    assert note.returncode == 0, note.stderr
+    assert note.stdout.strip().startswith("/kv/did-")
+
+    agent = run_panicking("did", "--seed", "33" * 32).stdout.strip()
+    del_cmd = run_panicking("delegate", "--seed", SEED, agent, "*", "10", "1")
+    assert del_cmd.returncode == 0, del_cmd.stderr
+    assert f"delegate: {agent} *" in del_cmd.stdout
+
+    record = f"delegate: {agent} * 9999999999 1 fake_sig"
+    check = run_panicking("check", did, input=record)
+    assert check.returncode != 0
+    assert "delegation verification requires cryptography" in check.stderr
+    assert "_PanicException" not in check.stderr
 
 
 def test_stdlib_backend_matches_rfc8032_vectors() -> None:
