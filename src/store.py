@@ -1549,11 +1549,11 @@ def _settle_count(root: Path, name: str, before: tuple[int, int] | None, kept: l
     back. Both readings wait every create out, so the window between them holds whole creates
     and nothing part-done: a reservation given back (a `?if=` refusal on a fresh key counts
     -1) is bracketed by the same two readings as its own `+1`, and `after - before` is exactly
-    the number that landed. Each of those is either in `kept` or missed by the walk, so the
-    figure written is the truth plus however many of them the walk happened to see — never
-    below the disk, exact on a quiet store, and re-established from a fresh walk on the next
-    pass, so the error never accumulates. `_reap` runs one pass at a time service-wide, which
-    is what keeps this a window and not an interleaving of two.
+    Each of those is either in `kept` or missed by the walk; bounded by `after` so that
+    creates seen by the walk do not inflate the total past the counter — never below the disk,
+    exact on a quiet store, and re-established from a fresh walk on the next pass, so the error
+    never accumulates. `_reap` runs one pass at a time service-wide, which is what keeps this a
+    window and not an interleaving of two.
 
     A `before` that did not parse — a lost or pre-format counter file, the case `_note_totals`
     answers by walking — offers no window at all. The walk is then the whole answer, except
