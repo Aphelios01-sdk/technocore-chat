@@ -1570,8 +1570,8 @@ def _settle_count(root: Path, name: str, before: tuple[int, int] | None, kept: l
             if before is None:
                 total, size = max(kept[0], after[0]), kept[1]
             else:
-                total = kept[0] + max(0, after[0] - before[0])
-                size = kept[1] + max(0, after[1] - before[1])
+                total = max(kept[0], min(after[0], kept[0] + max(0, after[0] - before[0])))
+                size = max(kept[1], min(after[1], kept[1] + max(0, after[1] - before[1])))
             _write_note_count(root, total, size, name=name)
     except OSError:
         pass
