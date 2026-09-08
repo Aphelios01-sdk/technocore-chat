@@ -102,16 +102,19 @@ try:
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PrivateKey as _CryptoPrivateKey,
+    )
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PublicKey,
     )
 except BaseException as exc:  # noqa: BLE001 - broken pyo3 wheels can raise outside Exception
     if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
         raise
-    _CryptoPrivateKey = None
-    Ed25519PublicKey = None  # type: ignore[assignment, misc]
+    _CryptoPrivateKey = None  # ty: ignore[invalid-assignment]
+    Ed25519PublicKey = None
 
-    class InvalidSignature(Exception):  # type: ignore[no-redef]
+    class InvalidSignature(Exception):  # noqa: N818 - mirrors cryptography.exceptions
         pass
+
 
 if __package__:
     from .stdlib_ed25519 import Ed25519PrivateKey as _StdlibPrivateKey
@@ -222,8 +225,19 @@ def load_key(seed_arg: str | None) -> tuple[Any, str]:
     return _new_key(bytes.fromhex(digest)), f"sha256({given!r})"
 
 
+def _raw_public(pub: Any) -> bytes:
+    """The 32 raw public-key bytes. public_bytes_raw() is cryptography >= 40; an older
+    native key still serializes through the long-standing Raw/Raw pair. Imported here
+    rather than at module scope so the fallback path never needs cryptography at all."""
+    if hasattr(pub, "public_bytes_raw"):
+        return pub.public_bytes_raw()
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    return pub.public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+
 def did_of(key: Any) -> str:
-    raw = key.public_key().public_bytes_raw()
+    raw = _raw_public(key.public_key())
     mb = "z" + multibase(MULTICODEC_ED25519 + raw)  # multibase tag + base58btc; fixed 'z6Mk' head
     if len(mb) != 48:  # 2 codec bytes + 32 key bytes base58-encode to 48 chars, always
         raise SystemExit(f"internal: bad multibase length {len(mb)}")

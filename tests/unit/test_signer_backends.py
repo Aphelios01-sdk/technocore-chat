@@ -61,7 +61,7 @@ def isolated_cryptography(block: bool = True):
             if k == "cryptography" or k.startswith("cryptography."):
                 del sys.modules[k]
         if block:
-            sys.modules["cryptography"] = None
+            sys.modules["cryptography"] = None  # ty: ignore[invalid-assignment]
         yield
     finally:
         for k in list(sys.modules.keys()):
@@ -264,3 +264,28 @@ def test_fallback_public_key_and_loader_in_signer() -> None:
 
     # InvalidSignature shim inherits from Exception:
     assert issubclass(signer.InvalidSignature, Exception)
+
+
+def test_signer_raw_public_supports_pre40_cryptography() -> None:
+    """Pre-40 cryptography has public_bytes(Encoding.Raw, PublicFormat.Raw) but no public_bytes_raw."""
+    signer = load_signer("signer_pre40_test")
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(RFC_8032_VECTORS[0][0]))
+    pub = key.public_key()
+
+    class Pre40PubStub:
+        def public_bytes(self, encoding: object, fmt: object) -> bytes:
+            return pub.public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    stub = Pre40PubStub()
+    assert not hasattr(stub, "public_bytes_raw")
+    raw = signer._raw_public(stub)
+    assert raw.hex() == RFC_8032_VECTORS[0][2]
+
+    class MockKey:
+        def public_key(self) -> Pre40PubStub:
+            return stub
+
+    assert signer.did_of(MockKey()) == did_for(bytes.fromhex(RFC_8032_VECTORS[0][2]))
